@@ -508,7 +508,7 @@ int GetCohFromJson(const json& js, const std::string& name_, int t_max, Cohomolo
                 cells_gen_v2.push_back(gen_degs[i]);
         ut::RemoveIf(cells_gen, [t_max](int n) { return n > t_max; });
         ut::RemoveIf(cells_gen_v2, [t_max](int n) { return n > t_max; });
-        if (ring == "S0")
+        if (ring == "S0" && !cells_gen.empty()) /* cells_gen: [] means "not supplied" (ok when only cell_images maps are used) */
             ErrorIdMsg::Assert(cells_gen == cells_gen_v2, fmt::format("cells_gen == cells_gen_v2 = {}", Serialize(cells_gen_v2)));
 
         coh.v_degs = gb.v_degs();
@@ -976,7 +976,7 @@ int GetCohMapFromJson(const std::string& name_, std::string& from_, std::string&
             Mod1d images1;
             if (has_cell_images) {
                 int1d gen_cells = GenCells(coh_to);
-                if (gen_cells.size() != cells_gen_to.size())
+                if (!cells_gen_to.empty() && gen_cells.size() != cells_gen_to.size())
                     return -2;
                 for (int c : gen_cells) {
                     Mod x;
