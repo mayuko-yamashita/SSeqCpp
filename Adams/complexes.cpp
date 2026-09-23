@@ -13,6 +13,33 @@ inline int get(const nlohmann::json& js, std::string key, int default_)
 
 using json = nlohmann::json;
 
+/* Ring-spectrum smash prefix: name = "<ring>_<X>" with ring in {tmf, ko}.
+ * Returns the number of Sq^{2^j} relations (j <= jmax) that define H^*(R ^ X) = A (x)_{A(n)} H^*(X):
+ * S0 -> all j, tmf -> j <= 2 (A(2)), ko -> j <= 1 (A(1)). */
+inline int SmashJMax(const std::string& ring)
+{
+    if (ring == "S0")
+        return 1 << 20;
+    if (ring == "tmf")
+        return 2;
+    if (ring == "ko")
+        return 1;
+    throw ErrorIdMsg(0x3a7c1e02, "ring not supported: " + ring);
+}
+
+inline bool ParseSmashPrefix(const std::string& name_, std::string& ring, std::string& base)
+{
+    std::smatch match;
+    if (std::regex_search(name_, match, std::regex("^(tmf|ko)_(\\w+)$")); match[0].matched) {
+        ring = match[1].str();
+        base = match[2].str();
+        return true;
+    }
+    ring = "S0";
+    base = name_;
+    return false;
+}
+
 /****************************************************
  *                   S0
  ***************************************************/
@@ -200,6 +227,8 @@ void Coh_P(int1d& v_degs, Mod1d& rels, Mod1d& cells, int1d& min_rels, int n1, in
         i_max = 1ULL << 30;
     else if (over == "tmf")
         i_max = 2;
+    else if (over == "ko")
+        i_max = 1;
     else {
         fmt::print("over={} not supported\n", over);
         throw ErrorIdMsg(0x87fe2a2b, "over not supported.");
@@ -384,12 +413,8 @@ int GetCohFromJson(const json& js, const std::string& name_, int t_max, Cohomolo
     try {
         auto& cws = js.at("CW_complexes");
         std::smatch match;
-        std::string ring = "S0";
-        std::string name = name_;
-        if (std::regex_search(name_, match, std::regex("^tmf_(\\w+)$")); match[0].matched) { /* tmf_C2 */
-            name = match[1].str();
-            ring = "tmf";
-        }
+        std::string ring, name;
+        ParseSmashPrefix(name_, ring, name); /* tmf_C2, ko_C2 */
         if (!cws.contains(name)) {
             return -1;
         }
@@ -460,9 +485,10 @@ int GetCohFromJson(const json& js, const std::string& name_, int t_max, Cohomolo
                 }
             }
         }
-        else if (ring == "tmf") {
+        else { /* tmf: A(2)-relations, ko: A(1)-relations */
+            const int j_max = SmashJMax(ring);
             for (size_t i = 0; i < gen_degs.size(); ++i) {
-                for (int j = 0; j <= 2 && (1 << j) + gen_degs[i] <= t_max; ++j) {
+                for (int j = 0; j <= j_max && (1 << j) + gen_degs[i] <= t_max; ++j) {
                     Mod rel = MMilnor::P(j, j + 1) * MMod(MMilnor(), i);
                     if (ut::has(ops, (int)i) && ut::has(ops.at((int)i), (int)(1 << j)))
                         for (int v1 : ops.at((int)i).at(int(1 << j)))
@@ -762,7 +788,7 @@ void GetCohMapFP2FP(const std::string& cw1, const std::string& cw2, std::string&
 
 int GetCoh(int1d& v_degs, Mod1d& rels, int d_max, const std::string& cw)
 {
-    std::regex is_P_regex("^(tmf_|X2_|)((R|C|H)P(?:m|)\\d+_(?:m|)\\d+)$"); /* match example: RP1_4, CPm1_10 */
+    std::regex is_P_regex("^(tmf_|ko_|X2_|)((R|C|H)P(?:m|)\\d+_(?:m|)\\d+)$"); /* match example: RP1_4, CPm1_10 */
     std::smatch match;
     if (cw == "S0")
         Coh_S0(v_degs, rels, d_max);
@@ -822,6 +848,8 @@ int GetCoh(int1d& v_degs, Mod1d& rels, int d_max, const std::string& cw)
             Coh_P(v_degs, rels, tmp_Mod1d, tmp_ind1d, n1, n2, d_max, "S0", hopf);
         else if (ring == "tmf_")
             Coh_P(v_degs, rels, tmp_Mod1d, tmp_ind1d, n1, n2, d_max, "tmf", hopf);
+        else if (ring == "ko_")
+            Coh_P(v_degs, rels, tmp_Mod1d, tmp_ind1d, n1, n2, d_max, "ko", hopf);
         else if (ring == "X2_")
             Coh_X2_RP(v_degs, rels, tmp_Mod1d, tmp_ind1d, n1, n2, d_max);  ////
         else {
@@ -857,12 +885,42 @@ Mod cell2Mod(const Cohomology& coh, const json& c)
     return result;
 }
 
+/* Cell spec (number d, or [d, i1, i2, ...]) -> list of cell indices */
+int1d cell2Indices(const Cohomology& coh, const json& c)
+{
+    int1d result;
+    if (c.is_number())
+        result.push_back(coh.indices_cells.at(c.get<int>()));
+    else {
+        int1d arr = c.get<std::vector<int>>();
+        if (!arr.empty()) {
+            int d = arr[0];
+            for (size_t i = 1; i < arr.size(); ++i) {
+                ErrorIdMsg::Assert(arr[i] < coh.num_cells.at(d), "cell index out of range");
+                result.push_back(coh.indices_cells.at(d) + arr[i]);
+            }
+        }
+    }
+    return result;
+}
+
+/* The cells that survive as minimal generators, in cell order (= generator order) */
+int1d GenCells(const Cohomology& coh)
+{
+    int1d result;
+    for (size_t i = 0; i < coh.cells.size(); ++i)
+        if (coh.cells[i].data.size() == 1 && coh.cells[i].GetLead().deg_m() == 0)
+            result.push_back((int)i);
+    return result;
+}
+
 constexpr int MAP_T_MAX = 265;
 
-int GetCohMapFromJson(const std::string& name_, std::string& from_, std::string& to_, Mod1d& images, int& sus, int& fil)
+int GetCohMapFromJson(const std::string& name_, std::string& from_, std::string& to_, Mod1d& images, int& sus, int& fil, int t_max)
 {
     auto js = myio::load_json("Adams.json");
-    const int t_max = MAP_T_MAX;
+    if (t_max <= 0)
+        t_max = MAP_T_MAX;
     try {
         auto& cws = js.at("CW_complexes");
         auto& maps = js.at("maps");
@@ -870,14 +928,15 @@ int GetCohMapFromJson(const std::string& name_, std::string& from_, std::string&
         std::smatch match;
         std::string ring = "";
         std::string name = name_;
-        if (std::regex_search(name_, match, std::regex("^tmf(?:_(\\w+)|)__tmf(?:_(\\w+)|)$")); match[0].matched) { /* tmf_C2__tmf */
-            auto cw1 = match[1].str();
-            auto cw2 = match[2].str();
+        if (std::regex_search(name_, match, std::regex("^(tmf|ko)(?:_(\\w+)|)__(tmf|ko)(?:_(\\w+)|)$")); match[0].matched) { /* tmf_C2__tmf, ko_C2__ko */
+            ErrorIdMsg::Assert(match[1].str() == match[3].str(), "smash prefixes must agree: " + name_);
+            auto cw1 = match[2].str();
+            auto cw2 = match[4].str();
             if (cw1.empty())
                 cw1 = "S0";
             if (cw2.empty())
                 cw2 = "S0";
-            ring = "tmf_";
+            ring = match[1].str() + "_";
             name = fmt::format("{}__{}", cw1, cw2);
         }
 
@@ -892,29 +951,54 @@ int GetCohMapFromJson(const std::string& name_, std::string& from_, std::string&
             to_ = "S0";
         sus = myio::get(map_json, "sus", 0);
         images = {};
-        if (map_json.contains("images")) {
+        if (map_json.contains("images") || map_json.contains("cell_images")) {
             fil = 0;
             int1d cells_gen_to;
             for (auto& c : cws.at(to).at("cells_gen"))
                 cells_gen_to.push_back(c.get<int>());
             Cohomology coh_from;
             GetCohFromJson(js, from, t_max, coh_from);
-
-            auto& images_json = map_json.at("images");
-            if (images_json.size() != cells_gen_to.size())
-                return -2;
-            Mod1d images1;
-            for (size_t i = 0; i < images_json.size(); ++i)
-                images1.push_back(cell2Mod(coh_from, images_json[i]));
-
-            /* Verify the map */
             Cohomology coh_to;
             GetCohFromJson(js, to, t_max, coh_to);
+
+            /* cell_images: for every cell of `to` (in `cells` order), the cells of `from` it maps to,
+             * as a cell spec (number d, or [d, i1, i2, ...]). This is the cell-level (F2-linear) map,
+             * which is what a smash-with-ring lift a (x) y -> a (x) f^*(y) needs. */
+            std::vector<int1d> cell_images;
+            bool has_cell_images = map_json.contains("cell_images");
+            if (has_cell_images) {
+                auto& ci = map_json.at("cell_images");
+                ErrorIdMsg::Assert(ci.size() == coh_to.cells.size(), fmt::format("cell_images must have one entry per cell of {}: {} != {}", to, ci.size(), coh_to.cells.size()));
+                for (size_t i = 0; i < ci.size(); ++i)
+                    cell_images.push_back(cell2Indices(coh_from, ci[i]));
+            }
+
+            Mod1d images1;
+            if (has_cell_images) {
+                int1d gen_cells = GenCells(coh_to);
+                if (gen_cells.size() != cells_gen_to.size())
+                    return -2;
+                for (int c : gen_cells) {
+                    Mod x;
+                    for (int c1 : cell_images[c])
+                        x += coh_from.cells[c1];
+                    images1.push_back(std::move(x));
+                }
+            }
+            else {
+                auto& images_json = map_json.at("images");
+                if (images_json.size() != cells_gen_to.size())
+                    return -2;
+                for (size_t i = 0; i < images_json.size(); ++i)
+                    images1.push_back(cell2Mod(coh_from, images_json[i]));
+            }
+
+            /* Verify the map */
             Groebner gb_from(t_max, {}, coh_from.v_degs);
             gb_from.AddRels(coh_from.rels, t_max);
             for (const auto& rel : coh_to.rels) {
                 int deg_f_rel = rel.GetLead().deg_m() + coh_to.v_degs[rel.GetLead().v()] + sus;
-                if (deg_f_rel <= MAP_T_MAX && gb_from.Reduce(subs(rel, images1))) {
+                if (deg_f_rel <= t_max && gb_from.Reduce(subs(rel, images1))) {
                     fmt::print("the map is not an A-module homomorphism");
                     return 2;
                 }
@@ -928,6 +1012,30 @@ int GetCohMapFromJson(const std::string& name_, std::string& from_, std::string&
                 GetCohFromJson(js, to_, t_max, coh_to_);
                 if (coh_to_.v_degs.size() == cells_gen_to.size()) {
                     images = std::move(images1);
+                }
+                else if (has_cell_images) {
+                    /* General case: H^*(R ^ X) = A (x)_{A(n)} H^*(X). The lift of f^* sends the
+                     * generator 1 (x) y (y a cell of `to`) to 1 (x) f^*(y), f^*(y) a sum of cells of `from`. */
+                    Cohomology coh_from_;
+                    GetCohFromJson(js, from_, t_max, coh_from_);
+                    Groebner gb_from_(t_max, {}, coh_from_.v_degs);
+                    gb_from_.AddRels(coh_from_.rels, t_max);
+                    int1d gen_cells_ = GenCells(coh_to_);
+                    ErrorIdMsg::Assert(gen_cells_.size() == coh_to_.v_degs.size(), "gen_cells_.size() == coh_to_.v_degs.size()");
+                    for (int c : gen_cells_) {
+                        Mod x;
+                        for (int c1 : cell_images[c])
+                            x += coh_from_.cells[c1];
+                        images.push_back(gb_from_.Reduce(std::move(x)));
+                    }
+                    /* Verify the lifted map */
+                    for (const auto& rel : coh_to_.rels) {
+                        int deg_f_rel = rel.GetLead().deg_m() + coh_to_.v_degs[rel.GetLead().v()] + sus;
+                        if (deg_f_rel <= t_max && gb_from_.Reduce(subs(rel, images))) {
+                            fmt::print("the lifted map {} is not an A-module homomorphism", name_);
+                            return 3;
+                        }
+                    }
                 }
                 else { // temporary fix for from that has at most one cell in target degree
                     std::map<int, int> gen_count;
@@ -967,7 +1075,7 @@ int GetCohMapFromJson(const std::string& name_, std::string& from_, std::string&
             std::string tmp1, tmp2;
             int sus_q, fil_q;
             Mod1d images_q;
-            GetCohMapFromJson(fmt::format("{}__{}", total, from), tmp1, tmp2, images_q, sus_q, fil_q);
+            GetCohMapFromJson(fmt::format("{}__{}", total, from), tmp1, tmp2, images_q, sus_q, fil_q, t_max);
 
             int1d cells_from;
             for (auto& c : cws.at(from).at("cells"))
@@ -1026,7 +1134,7 @@ int GetCohMapFromJson(const std::string& name_, std::string& from_, std::string&
     return 0;
 }
 
-void SetCohMap(const std::string& cw1, const std::string& cw2, std::string& from, std::string& to, Mod1d& images, int& sus, int& fil)
+void SetCohMap(const std::string& cw1, const std::string& cw2, std::string& from, std::string& to, Mod1d& images, int& sus, int& fil, int t_max)
 {
     from = cw1;
     to = cw2;
@@ -1076,7 +1184,7 @@ void SetCohMap(const std::string& cw1, const std::string& cw2, std::string& from
             images.push_back(cell_reduced[size_t(6 + 8 * (i - 2))]);
         return;
     }
-    if (cw2 == fmt::format("tmf_{}", cw1)) {
+    if (cw2 == fmt::format("tmf_{}", cw1) || cw2 == fmt::format("ko_{}", cw1)) {
         images = {MMod(MMilnor(), 0)};
         return;
     }
@@ -1130,7 +1238,7 @@ void SetCohMap(const std::string& cw1, const std::string& cw2, std::string& from
         }
     }
     std::string name = fmt::format("{}__{}", cw1, cw2);
-    if (int error = GetCohMapFromJson(name, from, to, images, sus, fil)) {
+    if (int error = GetCohMapFromJson(name, from, to, images, sus, fil, t_max)) {
         fmt::print("Error({}) - map not supported.\n", error);
         throw ErrorIdMsg(0x8636b4b2, "map not supported.");
     }

@@ -350,7 +350,7 @@ void compute_products(int t_trunc, const std::string& ring)  ////TODO: abstract 
     std::map<AdamsDegV2, Mod1d> diffs;              /* diffs[deg] is the list of differentials of v in deg */
     dbRes.load_generators(table_res, id_deg, vid_num, diffs, t_trunc);
     int1d gs_hopf, t_gs_hopf;
-    if (table_res == "S0_Adams_res" || table_res == "tmf_Adams_res") {
+    if (table_res == "S0_Adams_res" || table_res == "tmf_Adams_res" || table_res == "ko_Adams_res") {
         gs_hopf = dbRes.get_column_int(fmt::format("{}_generators", table_res), "id", "WHERE s=1 ORDER BY id");
         t_gs_hopf = dbRes.get_column_int(fmt::format("{}_generators", table_res), "t", "WHERE s=1 ORDER BY id");
     }
@@ -966,7 +966,7 @@ int main_prod_mod(int argc, char** argv, int& index, const char* desc)
     return 0;
 }
 
-void SetCohMap(const std::string& cw1, const std::string& cw2, std::string& from, std::string& to, Mod1d& images, int& sus, int& fil);
+void SetCohMap(const std::string& cw1, const std::string& cw2, std::string& from, std::string& to, Mod1d& images, int& sus, int& fil, int t_max);
 void SetDbCohMap(const std::string& db_map, const std::string& table_map, const std::string& from, const std::string& to, const Mod1d& images, int sus, int fil);
 
 int main_map_res(int argc, char** argv, int& index, const char* desc)
@@ -1001,7 +1001,7 @@ int main_map_res(int argc, char** argv, int& index, const char* desc)
         Mod1d images;
         int sus = 0, fil = 0;
         std::string from, to;
-        SetCohMap(cw1, cw2, from, to, images, sus, fil);
+        SetCohMap(cw1, cw2, from, to, images, sus, fil, t_max);
         SetDbCohMap(db_filename, tablename, from, to, images, sus, fil);
     }
 
